@@ -2,17 +2,21 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/davecgh/go-spew/spew"
 )
@@ -27,11 +31,14 @@ var (
 	server     = flag.String("Hostname", "homemate.orvibo.com:10002", "Server address:port to connect")
 )
 
+// Client struct definition
 type Client struct {
 	UserName  string
 	Password  string
 	Keys      map[string]string
-	Id        []byte
+	ID        []byte
+	Hashmd5   string
+	UserID    string
 	tlsClient *tls.Conn
 	ctx       context.Context
 }
@@ -46,6 +53,7 @@ type getSession struct {
 	SoftwareVersion string `json:"softwareVersion"`
 }
 
+// GetSession global struct
 type GetSession struct {
 	defaultStruct
 	getSession
@@ -71,6 +79,7 @@ type defaultStruct struct {
 	DebugInfo string  `json:"debugInfo"`
 }
 
+// Login global struct
 type Login struct {
 	defaultStruct
 	login
@@ -79,19 +88,25 @@ type Login struct {
 // NewClient constructor
 func NewClient(context context.Context, username string, password string, primaryKey string) *Client {
 
-	d := &Client{
+	c := &Client{
 		UserName: username,
 		Password: password,
 		ctx:      context,
 	}
-	d.Keys = make(map[string]string)
-	d.Keys["pk"] = primaryKey
-	d.Id = []byte{32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32}
+	c.Keys = make(map[string]string)
+	c.Keys["pk"] = primaryKey
+	c.ID = []byte{32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32}
 
-	// d.tlsClient = tlsConnection()
-	return d
+	hasher := md5.New()
+	hasher.Write([]byte(password))
+	c.Hashmd5 = strings.ToUpper(hex.EncodeToString(hasher.Sum(nil)))
+
+	c.tlsClient = tlsConnection()
+
+	return c
 }
 
+// GetSession method to retreive the dynamic key
 func (c *Client) GetSession() {
 	session := &GetSession{
 		defaultStruct{
@@ -115,9 +130,11 @@ func (c *Client) GetSession() {
 	if err != nil {
 		fmt.Print(err.Error())
 	}
+	spew.Dump(payload)
 	c.Encode(payload)
 }
 
+// Login method
 func (c *Client) Login() {
 	log := &Login{
 		defaultStruct{
@@ -128,7 +145,7 @@ func (c *Client) Login() {
 		},
 		login{
 			UserName: c.UserName,
-			Password: c.Password,
+			Password: c.Hashmd5,
 			FamilyID: "49ed7e5b91dd45c8af8cb37d3e4e1234",
 			Type:     float64(4),
 		},
@@ -148,47 +165,75 @@ func (c *Client) returnKey() string {
 	return c.Keys["pk"]
 }
 
+func (c *Client) returnKeyType() string {
+	if _, ok := c.Keys["dk"]; ok {
+		return "dk"
+	}
+	return "pk"
+}
+
+// Encode encrypt the payload
 func (c *Client) Encode(payload []byte) {
 	encrypted := AESEncrypt(payload, []byte(c.returnKey()))
 	c.Header(encrypted)
 }
 
+// Header add the header of the encrypted payload
 func (c *Client) Header(payload []byte) {
 	Packet := make([]byte, len(payload)+42)
 	copy(Packet[0:2], []byte("hd"))
 	binary.BigEndian.PutUint16(Packet[2:4], uint16(len(payload)+42))
-	copy(Packet[4:6], []byte("dk"))
+	copy(Packet[4:6], []byte(c.returnKeyType()))
 	calcrc := crc32.ChecksumIEEE(payload)
 	binary.BigEndian.PutUint32(Packet[6:10], calcrc)
-	copy(Packet[10:42], c.Id)
+	copy(Packet[10:42], c.ID)
 	copy(Packet[42:], payload)
+	spew.Dump(Packet)
 
-	_, err := c.tlsClient.Write(Packet)
+	c.Decode(Packet)
+
+	c.Send(Packet)
+}
+
+// Send on the wire
+func (c *Client) Send(data []byte) {
+	// first := true
+	n, err := c.tlsClient.Write(data)
 	if err != nil {
 		fmt.Print(err.Error())
 	}
-
+	var buf []byte
+	tmpbuf := make([]byte, 0, 256)
+	for {
+		n, err = c.tlsClient.Read(tmpbuf)
+		spew.Dump(tmpbuf)
+		if err != nil {
+			if err != io.EOF {
+				fmt.Println("read error:", err)
+			}
+			break
+		}
+		// if first {
+		// 	length := binary.BigEndian.Uint16(buf[2:4])
+		// 	buf = make([]byte, 0, length) // big buffer
+		// 	first = false
+		// }
+		buf = append(buf, tmpbuf[:n]...)
+	}
+	c.Decode(buf)
 }
 
+// Decode the packet and the header
 func (c *Client) Decode(data []byte) {
 	var jsonResult map[string]interface{}
-	// var merge bool
-	// if merge {
-	// 	data = append(previousData, data...)
-	// }
 
 	calcrc := crc32.ChecksumIEEE(data[42:])
 	crc := binary.BigEndian.Uint32(data[6:10])
 
 	if crc == calcrc {
-		// merge = false
 		fmt.Print("CRC OK :" + strconv.Itoa(int(crc)) + "\n")
-		// way++
 	} else {
-		// merge = true
-		// previousData = data
 		fmt.Print("CRC Error" + "\n")
-		// continue
 	}
 
 	fmt.Print("Magic : " + string(data[0:2]) + "\n")
@@ -196,9 +241,8 @@ func (c *Client) Decode(data []byte) {
 	fmt.Print("Length : " + strconv.Itoa(int(length)) + "\n")
 	fmt.Print("Type : " + string(data[4:6]) + "\n")
 	fmt.Print("Id : " + string(data[10:42]) + "\n")
-	c.Id = data[10:42]
-	fmt.Print("Payload Type : " + string(data[4]) + "\n")
-	spew.Dump([]byte(c.Keys[string(data[4:6])]))
+	c.ID = data[10:42]
+
 	decrypted := AESDecrypt(data[42:], []byte(c.Keys[string(data[4:6])]))
 	json.Unmarshal(decrypted, &jsonResult)
 
@@ -207,6 +251,8 @@ func (c *Client) Decode(data []byte) {
 		switch k {
 		case "key":
 			c.Keys["dk"] = v.(string)
+		case "userId":
+			c.UserID = v.(string)
 		default:
 		}
 	}
@@ -232,6 +278,7 @@ func tlsConnection() *tls.Conn {
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      caCertPool,
+		ServerName:   "homemate.orvibo.com",
 	}
 	tlsConfig.BuildNameToCertificate()
 
@@ -250,4 +297,5 @@ func main() {
 
 	client := NewClient(ctx, *username, *password, *primaryKey)
 	client.GetSession()
+	client.Login()
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 )
 
+// AESEncrypt return the encrypted content
 func AESEncrypt(content []byte, key []byte) []byte {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -33,6 +34,7 @@ func AESEncrypt(content []byte, key []byte) []byte {
 	return crypted
 }
 
+// AESDecrypt return the deecrypted content
 func AESDecrypt(crypt []byte, key []byte) []byte {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -60,12 +62,14 @@ func AESDecrypt(crypt []byte, key []byte) []byte {
 	return PKCS5Trimming(decrypted)
 }
 
+// PKCS5Padding add padding
 func PKCS5Padding(ciphertext []byte, blockSize int) []byte {
 	padding := blockSize - len(ciphertext)%blockSize
 	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
 	return append(ciphertext, padtext...)
 }
 
+// PKCS5Trimming trim padding
 func PKCS5Trimming(encrypt []byte) []byte {
 	padding := encrypt[len(encrypt)-1]
 	return encrypt[:len(encrypt)-int(padding)]
