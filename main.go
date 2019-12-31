@@ -17,6 +17,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 )
@@ -66,10 +67,22 @@ type login struct {
 	Type     float64 `json:"type"`
 }
 
+// Login global struct
+type Login struct {
+	defaultStruct
+	login
+}
+
 type executeScene struct {
 	SceneNo     string  `json:"sceneNo"`
 	UserName    string  `json:"userName"`
 	TriggerType float64 `json:"triggerType"`
+}
+
+// ExecuteScene global struct
+type ExecuteScene struct {
+	defaultStruct
+	executeScene
 }
 
 type defaultStruct struct {
@@ -77,12 +90,6 @@ type defaultStruct struct {
 	Serial    float64 `json:"serial"`
 	Ver       string  `json:"ver"`
 	DebugInfo string  `json:"debugInfo"`
-}
-
-// Login global struct
-type Login struct {
-	defaultStruct
-	login
 }
 
 // NewClient constructor
@@ -104,6 +111,30 @@ func NewClient(context context.Context, username string, password string, primar
 	c.tlsClient = tlsConnection()
 
 	return c
+}
+
+// ExecuteScene method to execute a scene
+func (c *Client) ExecuteScene() {
+	scene := &ExecuteScene{
+		defaultStruct{
+			Serial:    float64(5.86385658e+08),
+			Cmd:       float64(197),
+			Ver:       "4.2.3.300",
+			DebugInfo: "Android_ZhiJia365_27_4.2.3.300",
+		},
+		executeScene{
+			SceneNo:     "55d15b93f1c14898beab783de1b8af89",
+			TriggerType: float64(0),
+			UserName:    c.UserName,
+		},
+	}
+	var payload []byte
+	payload, err := json.Marshal(scene)
+	if err != nil {
+		fmt.Print(err.Error())
+	}
+
+	c.Encode(payload)
 }
 
 // GetSession method to retreive the dynamic key
@@ -130,7 +161,7 @@ func (c *Client) GetSession() {
 	if err != nil {
 		fmt.Print(err.Error())
 	}
-	spew.Dump(payload)
+
 	c.Encode(payload)
 }
 
@@ -188,7 +219,6 @@ func (c *Client) Header(payload []byte) {
 	binary.BigEndian.PutUint32(Packet[6:10], calcrc)
 	copy(Packet[10:42], c.ID)
 	copy(Packet[42:], payload)
-	spew.Dump(Packet)
 
 	c.Decode(Packet)
 
@@ -197,29 +227,35 @@ func (c *Client) Header(payload []byte) {
 
 // Send on the wire
 func (c *Client) Send(data []byte) {
-	// first := true
+	first := true
 	n, err := c.tlsClient.Write(data)
 	if err != nil {
 		fmt.Print(err.Error())
 	}
 	var buf []byte
-	tmpbuf := make([]byte, 0, 256)
+	tmpbuf := make([]byte, 512)
 	for {
 		n, err = c.tlsClient.Read(tmpbuf)
-		spew.Dump(tmpbuf)
+
 		if err != nil {
 			if err != io.EOF {
 				fmt.Println("read error:", err)
 			}
 			break
 		}
-		// if first {
-		// 	length := binary.BigEndian.Uint16(buf[2:4])
-		// 	buf = make([]byte, 0, length) // big buffer
-		// 	first = false
-		// }
-		buf = append(buf, tmpbuf[:n]...)
+		if n > 0 {
+			if first {
+				length := binary.BigEndian.Uint16(tmpbuf[2:4])
+				buf = make([]byte, 0, length) // big buffer
+				first = false
+			}
+			buf = append(buf, tmpbuf[:n]...)
+		}
+		if n <= 512 {
+			break
+		}
 	}
+
 	c.Decode(buf)
 }
 
@@ -286,8 +322,10 @@ func tlsConnection() *tls.Conn {
 	if err != nil {
 		fmt.Print("Error " + err.Error())
 	}
-
-	return tls.Client(conn, tlsConfig)
+	TLS := tls.Client(conn, tlsConfig)
+	// TLS.SetReadDeadline(time.Now().Add(1 * time.Second))
+	TLS.SetDeadline(time.Now().Add(4 * time.Second))
+	return TLS
 }
 
 func main() {
@@ -298,4 +336,5 @@ func main() {
 	client := NewClient(ctx, *username, *password, *primaryKey)
 	client.GetSession()
 	client.Login()
+	client.ExecuteScene()
 }
