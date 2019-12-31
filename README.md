@@ -1,42 +1,15 @@
-Golang script to decode Homemate api call
-=========================================
+Golang homemate scene
+=====================
 
 First thanks to @insertjokehere to help me to understand the last part of how to decrypt the network trafic between the Homemate application and the aws server.
 
-# Fetch the primary key
-
-You first need to download the Homemate apk file and extract it with apktool.
-
-```
-apktool d HomeMate_v4.2.3.300.com.apk -o HomeMate_v4.2.3.300.com
-```
-
-Then search for the key in the file.
-
-```
-grep vicenter_db_key HomeMate_v4.2.3.300.com/res/values/strings.xml
-```
-
-# Network capture
+This is a POC to test the way to trigger a scene that has been configured in the homemate application (and it works for me).
 
 
-```
-tshark -i ppp0 -f "port 10002" -w /tmp/homemate.pcap
+# Why ?
 
-tshark -r /tmp/homemate.pcap -q -z follow,ssl,raw,0 > tmp/raw.data
-```
+Because i want to control my AC based on the outside temperature (like if temp outside is greater than -15 use the AC else use the heater).
 
-# Decrypt
+# How it works
 
-Execute the script with the following parameters
-
-```
--file=/tmp/raw.data -password="the primary key"
-```
-
-
-# Next step
-
-Write a golang daemon to be able to use the homemate api to execute a scene
-
-
+TODO
